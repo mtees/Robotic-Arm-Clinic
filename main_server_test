@@ -1,0 +1,15 @@
+import client_two_way_4_29_22
+import json
+import time
+
+
+msg = [0,0,0,0,0,0,'test1','test1','test1','test1','test1','test1','test2','test2','test2','test2','test2','test2','test3','test3','test3','test3','test3','test3','test4','test4','test4','test4','test4','test4','test5','test5','test5','test5','test5','test5','test6','test6','test6','test6','test6','test6','test7','test7','test7','test7','test7','test7','test8','test8','test8','test8','test8','test8','test9','test9','test9','test9','test9','test9','',time.time()]
+print(msg)
+msg[len(msg)-2] = time.time()
+msg = json.dumps(msg)
+client_two_way_4_29_22.handle(msg)
+time.sleep(10)
+msg = "DISCONNECT"
+print(msg)
+msg = json.dumps(msg)
+client_two_way_4_29_22.handle(msg)
