@@ -1,0 +1,32 @@
+#!/usr/bin/env python3 
+
+import socket
+#from move_gazebo import temp_read
+HEADER = 64
+PORT = 8884
+FORMAT = 'utf-8'
+DISCONNECT_MESSAGE = "DISCONNECT"
+SERVER = "150.250.101.16" # must be the IPv4 of receiver
+ADDR = (SERVER, PORT)
+msg = 0
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(ADDR)
+global data
+
+
+def send(send_length,message):
+    global data
+    client.send(send_length)
+    client.send(message)
+    data = client.recv(2048).decode(FORMAT)
+    return data
+
+
+def handle(msg):
+    message = msg.encode(FORMAT)
+    msg_length = len(message)
+    send_length = str(msg_length).encode(FORMAT)
+    send_length += b' ' * (HEADER - len(send_length))
+    test_var = send(send_length, message)
+    print(test_var)
+    return test_var
