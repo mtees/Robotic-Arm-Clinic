@@ -1,0 +1,234 @@
+# version 17 implements writing the data to a csv file and implements the initial seconds since the program started into the data receieved
+# version 17.1, updated 11-18-21: implemented more features to be written to csv file, updated robot_manipulation to include a getter and setter method for T_sb to determine robot actual coordinates
+# version 17.2, updated 12-22-21: adapted to LSU lab, changed IP and coordinate. x=-x, y=z, z=y+0.1, add 0.1 to z to avoid hitting the base
+# version 18, updated 01-14-22: try to adjust robot response time
+# version 19, adding new feature to try and decrease delay. Making a multi-dimensional array to send over internet instead of 1D array
+# version 19_2_11_22, adding a third thread, parsed_data, and change the functionality of received_data. received_data now finds the averages of 3 packets of data to send to parsed_data
+# version 20 3-10-22, fully implemented LIFO queue structure
+# version 20 22-6-9, changed data format to year-month-day for readability, updated the gripper values
+
+import socket 
+import threading
+import json
+import time
+import pandas as pd
+import numpy as np
+import socket
+#from interbotix_xs_modules.arm import InterbotixManipulatorXS
+#Rob = InterbotixManipulatorXS("px150", "arm", "gripper") # create robot object
+
+HEADER = 64 #set header?
+PORT = 8884 # set server port
+
+#ip address
+hostname = socket.gethostname()
+## getting the IP address using socket.gethostbyname() method
+ip_address = socket.gethostbyname(hostname)
+## printing the hostname and ip_address
+print(f"Hostname: {hostname}")
+print(f"IP Address: {ip_address}")
+SERVER = ip_address # set server IPv4
+
+
+ADDR = (SERVER, PORT) # create address out of server and port
+FORMAT = 'utf-8' # set text format
+DISCONNECT_MESSAGE = "DISCONNECT"
+msg_Queue = [] # values are received at 18 frames a second when list row size is 3, queue size is 3 seconds
+parsed_Queue = []
+global total_array
+total_array = pd.DataFrame()
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # create a server with IPv4 (AF_INET) and stream socket (SOCK_STREAM)
+server.bind(ADDR) # bind the created server to the defined address
+
+def handle_client(conn, addr):
+    global i
+    print("[NEW CONNECTION] {0} connected.".format(ADDR))
+    connected = True
+    while connected:
+        msg_length = conn.recv(HEADER).decode(FORMAT) # receive up to 64 (HEADER) bytes of data and decode as UTF-8
+        if msg_length: # check if data was received
+            msg_length = int(msg_length) # convert the msg_length to integer
+            msg = conn.recv(msg_length).decode(FORMAT) # receive data for the msg_length and decode as UTF-8
+            msg = json.loads(msg) # convert the msg from JSON string to python dict
+            print(msg)
+            #disconnect
+            if msg == DISCONNECT_MESSAGE: # check if the message is to disconnect
+                connected = False # break the loop
+            
+            # setting the components to the data received from the msg
+            received_time = time.time()
+            msg_Queue.append((msg, received_time))  # Store msg and received_time as a tuple in msg_Queue
+            print(msg)
+            msg_Queue.append(msg) # append the message with time data to the end of the msg_Queue
+
+            # print("[{0}] {1}".format(ADDR, msg))
+            conn.send("Msg received".encode(FORMAT)) # send "Msg received" to the socket
+            
+            # sends array to csv file (change to next test when doing multiple test runs)
+            total_array.to_csv('video_test_LIFO.csv', sep=',')
+
+    conn.close()
+        
+
+def start():
+    server.listen(-1)
+    print("[LISTENING] Server is listening on {0}".format(SERVER))
+    while True:
+        conn, addr = server.accept() # Accept a connection. The socket must be bound to an address and listening for connections. The return value is a pair (conn, address) where conn is a new socket object usable to send and receive data on the connection, and address is the address bound to the socket on the other end of the connection.
+        thread_connection = threading.Thread(target=handle_client, args=(conn, addr)) # starts a thread which runs handle_client
+        thread_received = threading.Thread(target = received_data) # starts a thread which runs received_data
+        #thread_parsed = threading.Thread(target = parsed_data) # starts a thread which runs parsed_data
+        print("[ACTIVE CONNECTIONS] {0}".format(threading.activeCount() - 1)) # print the number of active threads - 1
+        thread_connection.start() # start the threads
+        thread_received.start()
+        #thread_parsed.start()
+        thread_connection.join() # convert to string
+        thread_received.join()
+        #thread_parsed.join()
+
+# thread to receive data and unpackage it correctly (average or non-average)
+def received_data():
+    stop = False
+    while not stop:
+        print("test while")
+        x = 0
+        try:
+            print ("test try")
+           
+            # grabs the array out of the msgQueue
+            msgData = msg_Queue.pop()
+            del msg_Queue[:]
+            print("test 1")
+            print (msgData)
+
+            # Unpack msgData into msg and received_time
+            msg, received_time = msgData[0], msgData[1]
+            
+            # changes the msg data into an array
+            msgArray = np.array(msgData)
+            print ("test 2")
+            print(msgArray)
+            
+            # retrieves the sent time and received time and finds the delay time
+            sentTime = msgData[len(msgData)-3]
+            packageCreationTime = msgData[len(msgData) - 2]
+            receivedTime = msgData[len(msgData)-1]
+            delayTime = receivedTime - sentTime
+            print ("test 3")
+            print(msgArray)
+            
+            # (#,) = how many packets are being receieved + 1 (so for 9 values arrays received, enter 10), (,#) = how many values per array we want to recreate 
+            msgArray = msgArray[:len(msgData)-3]
+            print("msg array:")
+            print(msgArray)
+            reshapedArray = msgArray.reshape(10,6) 
+            print("reshaped array:")
+            print(reshapedArray)
+            reshapedArray = np.delete(reshapedArray, 0, axis=0) # removes the first array, which is just 0's
+            print ("test 4")
+            
+            
+            '''
+            # goes through 3 arrays, grabs the x, y, z, roll, and grab values and puts them into their own array and sends it to parsed_data
+            for x in range(2):
+                # grabs the averages of each of the values, puts them into an array, then appends the array into the parsed_Queue
+                averageX = (reshapedArray[0 + (x*3)][1] + reshapedArray[1 + (x*3)][1] + reshapedArray[2 + (x*3)][1])/3
+                averageY = (reshapedArray[0 + (x*3)][2] + reshapedArray[1 + (x*3)][2] + reshapedArray[2 + (x*3)][2])/3
+                averageZ = (reshapedArray[0 + (x*3)][3] + reshapedArray[1 + (x*3)][3] + reshapedArray[2 + (x*3)][3])/3
+                averageR = (reshapedArray[0 + (x*3)][4] + reshapedArray[1 + (x*3)][4] + reshapedArray[2 + (x*3)][4])/3
+                averageG = (reshapedArray[0 + (x*3)][5] + reshapedArray[1 + (x*3)][5] + reshapedArray[2 + (x*3)][5])/3
+                parsedData = [averageX, averageY, averageZ, averageR, averageG]
+                parsed_Queue.append(parsedData)
+                x = x + 1
+            x = 0    
+            '''
+            # grabs each x, y, z, roll, and grab from each packet and append them to the queue
+            for x in range(8):
+                parsedData = [reshapedArray[x][0], reshapedArray[x][1], reshapedArray[x][2], reshapedArray[x][3], reshapedArray[x][4], reshapedArray[x][5], delayTime, receivedTime, packageCreationTime]
+                parsed_Queue.append(parsedData)
+                
+            stop = True    
+            
+        except IndexError: 
+            print("test except")
+            # adds a small buffer to prevent overlapping movements
+            time.sleep(0.000001)
+            pass
+    
+def parsed_data():
+    global total_array
+    while True:
+        # try to execute the code, if error, pass and do function again
+        try:
+            # takes the first out of the parsed_Queue and sends it to the robot, then deletes the rest of the queue values
+            parsedData = parsed_Queue.pop()
+            del parsed_Queue[:]
+            parsedData = parsedData.join()
+        except IndexError:
+            pass
+'''
+        try:
+            # changes the parsed data into an array
+            np.array(parsedData)
+            
+            # gathering queue time
+            queueInputTime = parsedData[7]
+            queueOutputTime = time.time()
+            queueTime = str(queueOutputTime - queueInputTime)
+            
+            # gathers the inital run time of the arm
+            initial_run_time = time.time()
+            
+            # parsedData[2] = LEAP motion x value, parsedData[0] = LEAP motion y value, parsedData[1] = LEAP motion z value, parsedData[4] = roll value of hand, parsedData[5] = grab strength (0 to 1)
+            Rob.arm.set_ee_pose_components(x=parsedData[2], y=parsedData[0], z=parsedData[1]+0.1, roll = parsedData[3], moving_time=0.5, accel_time=0.25, execute=True, blocking=False)
+            grab = parsedData[4]
+            
+            # sets the gripper to open or closed
+            if grab:
+                Rob.gripper.set_pressure(1.0)
+                Rob.gripper.close(0.1)
+            else:
+                Rob.gripper.set_pressure(1.0)
+                Rob.gripper.open(0.1)
+        
+            # determines if the robot successfully moved or not
+            successful_move = Rob.arm.get_robot_move()
+            
+            # determines final run time, the calculates the total run time
+            final_run_time = time.time()
+            total_run_time = final_run_time - initial_run_time
+            total_code_time = final_run_time - parsedData[5]
+            
+            # setting a variable equal to the actual robot end effector position
+            end_effector = Rob.arm.get_T_save()
+            end_x = end_effector[0][3]
+            end_y = end_effector[1][3]
+            end_z = end_effector[2][3]
+        
+            # writing outputs to a pandas dataframe
+            # array_df = pd.DataFrame([parsedData], columns=['initial time (sec)', 'LEAP x', 'LEAP y', 'LEAP z', 'roll values', 'grip strength values'])
+            array_df = pd.DataFrame([parsedData[5]], columns=['client time (sec)'])
+            array_df.insert(len(array_df.columns), 'server time (sec)', queueOutputTime)
+            array_df.insert(len(array_df.columns), 'received x values', parsedData[0])
+            array_df.insert(len(array_df.columns), 'received y values', parsedData[1])
+            array_df.insert(len(array_df.columns), 'received z values', parsedData[2])
+            array_df.insert(len(array_df.columns), 'roll values', parsedData[3])
+            array_df.insert(len(array_df.columns), 'grip strength values', parsedData[4])
+            array_df.insert(len(array_df.columns), 'robot x values', end_x)
+            array_df.insert(len(array_df.columns), 'robot y values', end_y)
+            array_df.insert(len(array_df.columns), 'robot z values', end_z)
+            array_df.insert(len(array_df.columns), 'package creation time (sec)', parsedData[8])
+            array_df.insert(len(array_df.columns), 'internet delay time (sec)', parsedData[6])
+            array_df.insert(len(array_df.columns), 'queue time (sec)', queueTime)
+            array_df.insert(len(array_df.columns), 'robot movement time (sec)', total_run_time)
+            array_df.insert(len(array_df.columns), 'total code time (sec)', total_code_time)
+            array_df.insert(len(array_df.columns), 'success move?', successful_move)
+            
+            # append array_df to another dataframe called total_array
+            total_array = total_array.append(array_df, ignore_index=True)
+        except:
+            pass
+'''
+print("[STARTING] Server is starting...")
+start()
